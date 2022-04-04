@@ -11,16 +11,8 @@ probe(Proxy) :-
     probe_url(Target),
 	probe(Proxy, Target).
 
-:- built_in(round_robin/2).
-round_robin(Elem, List) :-
-	request_counter(C),
-	length(List, N),
-	M is (C mod N) + 1,
-	nth(M, List, Elem).
-
-:- built_in(nth/3).
-nth(1, [Elem|_], Elem) :- !.
-nth(N, [_|Rest], Elem) :-
-	N > 1,
-	M is N - 1,
-	nth(M, Rest, Elem).
+:- built_in(mod/3).
+mod(N, List, Elem) :-
+	length(List, L),
+	M is N mod L,
+	nth0(M, List, Elem).

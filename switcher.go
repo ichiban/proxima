@@ -5,16 +5,14 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"fmt"
+	"github.com/ichiban/prolog"
+	"github.com/ichiban/prolog/engine"
+	"github.com/rs/zerolog/hlog"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
-
-	"github.com/ichiban/prolog"
-	"github.com/ichiban/prolog/engine"
-	"github.com/rs/zerolog/hlog"
 )
 
 const (
@@ -23,22 +21,23 @@ const (
 	scheme             = "http://"
 )
 
+//go:embed predicates.pl
+var predicates string
+
 type Switcher struct {
 	*prolog.Interpreter
 }
 
-//go:embed predicates.pl
-var predicates string
+func New(files []string) (*Switcher, error) {
+	s := Switcher{
+		Interpreter: prolog.New(nil, nil),
+	}
 
-func Open(files []string) (*Switcher, error) {
-	p := prolog.New(nil, os.Stdout)
-	p.Register3("host_port", HostPort)
-	p.Register3("uri_template", URITemplate)
-	p.Register4("http_get", HTTPGet)
-	p.Register3("log", Log)
-	p.Register1("request_counter", RequestCounter)
+	s.Register3("host_port", HostPort)
+	s.Register3("uri_template", URITemplate)
+	s.Register3("log", Log)
 
-	if err := p.Exec(predicates); err != nil {
+	if err := s.Exec(predicates); err != nil {
 		return nil, err
 	}
 
@@ -48,14 +47,12 @@ func Open(files []string) (*Switcher, error) {
 			return nil, err
 		}
 
-		if err := p.Exec(string(b)); err != nil {
+		if err := s.Exec(string(b)); err != nil {
 			return nil, err
 		}
 	}
 
-	return &Switcher{
-		Interpreter: p,
-	}, nil
+	return &s, nil
 }
 
 type contextKey struct{}
@@ -167,7 +164,15 @@ func (s *Switcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Switcher) options(r *http.Request) (engine.Term, error) {
+	rid, _ := hlog.IDFromRequest(r)
+
 	elems := []engine.Term{
+		&engine.Compound{
+			Functor: "rid",
+			Args: []engine.Term{
+				engine.Integer(rid.Counter()),
+			},
+		},
 		&engine.Compound{
 			Functor: "remote",
 			Args: []engine.Term{

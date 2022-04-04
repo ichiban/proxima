@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
@@ -28,13 +29,13 @@ func main() {
 		Timestamp().
 		Logger()
 
-	s, err := proxima.Open(flag.Args())
+	s, err := proxima.New(flag.Args())
 	if err != nil {
 		log.Fatal().Err(err).Msg("proxima.Open() failed")
 	}
 
-	ctx, close := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer close()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
 
 	serve(ctx, s, log)
 }
@@ -46,6 +47,8 @@ func serve(ctx context.Context, s *proxima.Switcher, log zerolog.Logger) {
 	if err := s.QuerySolutionContext(ctx, `listen(Addr).`).Scan(&result); err != nil {
 		log.Fatal().Err(err).Msg("listen(Addr) failed")
 	}
+
+	log.Info().Str("addr", result.Addr).Msg("Start")
 
 	srv := http.Server{
 		Addr:    result.Addr,
@@ -59,7 +62,10 @@ func serve(ctx context.Context, s *proxima.Switcher, log zerolog.Logger) {
 			log.Fatal().Err(err).Msg("srv.Shutdown() failed")
 		}
 	}()
-	if err := srv.ListenAndServe(); err != nil {
+	switch err := srv.ListenAndServe(); {
+	case errors.Is(err, http.ErrServerClosed):
+		log.Info().Str("addr", result.Addr).Msg("Finish")
+	default:
 		log.Fatal().Err(err).Msg("srv.ListenAndServe() failed")
 	}
 }

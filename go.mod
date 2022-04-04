@@ -3,7 +3,7 @@ module proxima
 go 1.17
 
 require (
-	github.com/ichiban/prolog v0.8.0
+	github.com/ichiban/prolog v0.9.1
 	github.com/jtacoma/uritemplates v1.0.0
 	github.com/justinas/alice v1.2.0
 	github.com/rs/zerolog v1.26.1
