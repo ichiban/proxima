@@ -41,6 +41,8 @@ func main() {
 }
 
 func serve(ctx context.Context, s *proxima.Switcher, log zerolog.Logger) {
+	ctx = context.WithValue(ctx, proxima.LogKey, &log)
+
 	var result struct {
 		Addr string
 	}
@@ -48,7 +50,7 @@ func serve(ctx context.Context, s *proxima.Switcher, log zerolog.Logger) {
 		log.Fatal().Err(err).Msg("listen(Addr) failed")
 	}
 
-	log.Info().Str("addr", result.Addr).Msg("Start")
+	log.Info().Str("addr", result.Addr).Msg("start")
 
 	srv := http.Server{
 		Addr:    result.Addr,
@@ -64,7 +66,7 @@ func serve(ctx context.Context, s *proxima.Switcher, log zerolog.Logger) {
 	}()
 	switch err := srv.ListenAndServe(); {
 	case errors.Is(err, http.ErrServerClosed):
-		log.Info().Str("addr", result.Addr).Msg("Finish")
+		log.Info().Str("addr", result.Addr).Msg("finish")
 	default:
 		log.Fatal().Err(err).Msg("srv.ListenAndServe() failed")
 	}

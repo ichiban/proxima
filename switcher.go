@@ -35,6 +35,7 @@ func New(files []string) (*Switcher, error) {
 
 	s.Register3("host_port", HostPort)
 	s.Register3("uri_template", URITemplate)
+	s.Register4("probe", Probe)
 	s.Register3("log", Log)
 
 	if err := s.Exec(predicates); err != nil {
@@ -57,7 +58,7 @@ func New(files []string) (*Switcher, error) {
 
 type contextKey struct{}
 
-var logKey contextKey
+var LogKey contextKey
 
 func (s *Switcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log := hlog.FromRequest(r)
@@ -90,7 +91,7 @@ func (s *Switcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	ctx = context.WithValue(ctx, logKey, log)
+	ctx = context.WithValue(ctx, LogKey, log)
 
 	sols, err := s.QueryContext(ctx, `tunnel(Proxy, ?).`, opts)
 	if err != nil {
@@ -143,15 +144,13 @@ func (s *Switcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		f, err := Tunnel(inbound, outbound, target, r.Header)
-		if err != nil {
+		log.Info().Msg("tunnel start")
+		if err := Tunnel(inbound, outbound, target, r.Header); err != nil {
 			log.Warn().Err(err).Msg("Tunnel() failed")
 			continue
 		}
-
-		log.Info().Msg("tunnel start")
-		f()
 		log.Info().Msg("tunnel finish")
+
 		return
 	}
 

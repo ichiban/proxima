@@ -2,11 +2,13 @@
 
 ## What is this?
 
-**Proxima** is the only reasonable proxy manager.
+**Proxima** is an intelligent proxy manager that lets you get the most out of HTTP proxies and proxy providers.
 
-- Works with any HTTP proxies
-- Supports a variety of HTTP proxy providers such as Bright Data (formerly known as Luminati), Oxylabs, GeoSurf, Smartproxy, and so on
-- Incredibly flexible
+- Rule-based proxy selection
+- Filters out unavailable / malicious proxies
+- Rotates proxies
+- Works with any HTTP tunneling proxies
+- Supports a variety of proxy providers such as Bright Data (formerly known as Luminati), Oxylabs, GeoSurf, Smartproxy, and so on
 
 ## Usage
 
@@ -40,8 +42,6 @@ $ $(go env GOPATH)/bin/proxima config.pl
 
 ### Make an HTTP request via the proxy manager
 
-Assuming you're running a proxy at 'localhost:8083', a request via the proxy manager results in success.
-
 ```console
 $ curl -I -x one,three@localhost:8080 https://httpbin.org/status/200
 HTTP/1.1 200 OK
@@ -55,19 +55,68 @@ content-length: 0
 server: gunicorn/19.9.0
 access-control-allow-origin: *
 access-control-allow-credentials: true
-
 ```
 
-The log tells the first trial via `localhost:8081` failed since it's not running a proxy, but the second trial via `localhost:8083` succeeded since it's running.
-It didn't try `localhost:8082` since the given options `one,three` didn't match the tag `two`.
+## How Proxima queries the configuration file
 
-```console
-$ go run cmd/proxima/main.go config.pl
-8:52PM INF Start addr=:8080
-8:52PM WRN net.Dial() failed error="dial tcp [::1]:8081: connect: connection refused" proxy=localhost:8081 remote=[::1]:52888 rid=c95do52s1s437fk32dpg ua=curl/7.77.0
-8:52PM INF tunnel start proxy=localhost:8083 remote=[::1]:52888 rid=c95do52s1s437fk32dpg ua=curl/7.77.0
-8:52PM INF tunnel finish proxy=localhost:8083 remote=[::1]:52888 rid=c95do52s1s437fk32dpg ua=curl/7.77.0
-```
+### On startup 
+
+Proxima queries the configuration file with `listen(Addr).` for the address to wait for incoming `CONNECT` requests.
+
+### On each `CONNECT` request
+
+Proxima queries the configuration file with `tunnel(Proxy, Options).` to filter out proxies and use the first one to which Proxima actually succeeds on connecting.
+
+`Options` is a list of:
+- `rid(ID)`: `ID` is an integer ID for the `CONNECT` request
+- `remote(Addr)`: `Addr` is an atom that represents the address of the client 
+- `target(Addr)`: `Addr` is an atom that represents the address of the server
+- anything passed in the userinfo subcomponent
 
 ## Built-in predicates
+
+The Prolog processor is based on [`ichiban/prolog`](https://github.com/ichiban/prolog) extended by the custom built-in predicates listed below.
+
+### `host_port/3`
+
+`host_port(HostPort, Host, Port)` succeeds iff the atom `HostPort` is the concatenation of the atom `Host` and the integer `Port`.
+It can be used either to break down `HostPort` into `Host` and `Port` or to construct `HostPort` out of `Host` and `Port`.
+
+### `uri_template/3` 
+
+`uri_template(Template, Pairs, URI)` applies `Key-Value` pairs in the list `Pairs` to the atom `Template` which is a [URI Template described in RFC6570](https://datatracker.ietf.org/doc/html/rfc6570/) and unifies the result with `URI`.
+
+This is useful especially when you're working with a proxy provider that has session ID functionality. See `examples/03_uri_template.pl`. 
+
+### `probe/4` 
+
+`probe(Proxy, Target, Options, Status)` probes the availability of `Proxy` by making an HTTP GET request to the URL `target` and succeeds if the resulting status code unifies with `Status`.
+
+`Options` is a proper list containing:
+- `Header-Values` where `Header` is an atom and `Values` is a list of atoms
+
+### `probe/3` 
+
+`probe(Proxy, Target, Options)` is similar to `proby(Proxy, Target, Options, Status)` but succeeds only if `Status` is a successful status code 2XX.
+
+### `probe/2`
+
+`probe(Proxy, Target)` is same as `probe(Proxy, Target, [])`. See `examples/05_probe.pl`.
+
+### `log/3`
+
+`log(Level, Message, Pairs)` outputs a structured log to stderr. `Level` must be one of the log levels listed below. `Message` is the message portion of the log. `Pairs` is the list of `Key-Value` pairs in the structured log.
+
+Log levels are:
+- `debug`
+- `info`
+- `warn`
+- `error`
+
+### `mod/3`
+
+`mod(N, List, Elem)` is similar to `nth0(N, List, Elem)` but `N` can be greater than the length of `List`. In that case, `N` will be replaced by the remainder of the division of `N` by the length of `List`.
+
+Combined with `member(rid(N), Options)`, you can implement a round-robin scheduler for a list of proxies. See `examples/02_round_robin.pl`.
+
 

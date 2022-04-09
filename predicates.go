@@ -2,23 +2,24 @@ package proxima
 
 import (
 	"context"
-	"github.com/ichiban/prolog/engine"
-	"github.com/jtacoma/uritemplates"
-	"github.com/rs/zerolog"
 	"net"
 	"net/http"
 	"strconv"
+
+	"github.com/ichiban/prolog/engine"
+	"github.com/jtacoma/uritemplates"
+	"github.com/rs/zerolog"
 )
 
 // URITemplate expands template with Key-Value in pairs list and unifies it with url.
-func URITemplate(url, template, pairs engine.Term, k func(*engine.Env) *engine.Promise, env *engine.Env) *engine.Promise {
+func URITemplate(template, pairs, url engine.Term, k func(*engine.Env) *engine.Promise, env *engine.Env) *engine.Promise {
 	switch temp := env.Resolve(template).(type) {
 	case engine.Variable:
 		return engine.Error(engine.ErrInstantiation)
 	case engine.Atom:
 		t, err := uritemplates.Parse(string(temp))
 		if err != nil {
-			return engine.Error(engine.SystemError(err))
+			return engine.Error(engine.DomainError("uri_template", temp))
 		}
 
 		values := map[string]interface{}{}
@@ -34,10 +35,7 @@ func URITemplate(url, template, pairs engine.Term, k func(*engine.Env) *engine.P
 			return engine.Error(err)
 		}
 
-		ret, err := t.Expand(values)
-		if err != nil {
-			return engine.Error(engine.SystemError(err))
-		}
+		ret, _ := t.Expand(values)
 
 		return engine.Unify(url, engine.Atom(ret), k, env)
 	default:
@@ -67,12 +65,9 @@ func HostPort(hostPort, host, port engine.Term, k func(*engine.Env) *engine.Prom
 	case engine.Atom:
 		h, p, err := net.SplitHostPort(string(hp))
 		if err != nil {
-			return engine.Error(engine.SystemError(err))
+			return engine.Error(engine.DomainError("host_port", hp))
 		}
-		po, err := strconv.Atoi(p)
-		if err != nil {
-			return engine.Error(engine.SystemError(err))
-		}
+		po, _ := strconv.Atoi(p)
 		given := engine.Compound{Args: []engine.Term{host, port}}
 		actual := engine.Compound{Args: []engine.Term{engine.Atom(h), engine.Integer(po)}}
 		return engine.Unify(&given, &actual, k, env)
@@ -81,72 +76,61 @@ func HostPort(hostPort, host, port engine.Term, k func(*engine.Env) *engine.Prom
 	}
 }
 
-func Probe(proxy, target, options engine.Term, k func(*engine.Env) *engine.Promise, env *engine.Env) *engine.Promise {
-	return engine.Delay(func(ctx context.Context) *engine.Promise {
-		var req *http.Request
-		switch t := env.Resolve(target).(type) {
-		case engine.Variable:
-			return engine.Error(engine.ErrInstantiation)
-		case engine.Atom:
-			var err error
-			req, err = http.NewRequest(http.MethodGet, string(t), nil)
-			if err != nil {
-				return engine.Error(engine.SystemError(err))
-			}
-		default:
-			return engine.Error(engine.TypeErrorAtom(t))
-		}
+var clientDo = (*http.Client).Do
 
-		var c http.Client
-		switch p := env.Resolve(proxy).(type) {
-		case engine.Variable:
-			return engine.Error(engine.ErrInstantiation)
-		case engine.Atom:
-			u, err := ParseURL(string(p))
-			if err != nil {
-				return engine.Error(engine.SystemError(err))
-			}
-
-			t := http.DefaultTransport.(*http.Transport).Clone()
-			t.Proxy = http.ProxyURL(u)
-			c.Transport = t
-		default:
-			return engine.Error(engine.TypeErrorAtom(proxy))
-		}
-
-		iter := engine.ListIterator{List: options, Env: env}
-		for iter.Next() {
-
-		}
-		if err := iter.Err(); err != nil {
-			return engine.Error(err)
-		}
-
-		res, err := c.Do(req)
+// Probe probes by making an HTTP request to the target via the proxy.
+func Probe(proxy, target, options, status engine.Term, k func(*engine.Env) *engine.Promise, env *engine.Env) *engine.Promise {
+	var c http.Client
+	switch p := env.Resolve(proxy).(type) {
+	case engine.Variable:
+		return engine.Error(engine.ErrInstantiation)
+	case engine.Atom:
+		u, err := ParseURL(string(p))
 		if err != nil {
-			return engine.Error(engine.SystemError(err))
+			return engine.Error(engine.DomainError("url", p))
 		}
 
-		if err := res.Body.Close(); err != nil {
-			return engine.Error(engine.SystemError(err))
-		}
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.Proxy = http.ProxyURL(u)
+		c.Transport = t
+	default:
+		return engine.Error(engine.TypeErrorAtom(proxy))
+	}
 
-		if res.StatusCode/100 != 2 {
-			return engine.Bool(false)
+	var req *http.Request
+	switch t := env.Resolve(target).(type) {
+	case engine.Variable:
+		return engine.Error(engine.ErrInstantiation)
+	case engine.Atom:
+		var err error
+		req, err = http.NewRequest(http.MethodGet, string(t), nil)
+		if err != nil {
+			return engine.Error(engine.DomainError("url", t))
 		}
+	default:
+		return engine.Error(engine.TypeErrorAtom(t))
+	}
 
-		return k(env)
-	})
+	if err := probeOptions(&c, req, options, env); err != nil {
+		return engine.Error(err)
+	}
+
+	res, err := clientDo(&c, req)
+	if err != nil {
+		return engine.Bool(false)
+	}
+	_ = res.Body.Close()
+
+	return engine.Unify(status, engine.Integer(res.StatusCode), k, env)
 }
 
-func termHeader(pairs engine.Term, env *engine.Env) (http.Header, error) {
-	ret := http.Header{}
+func probeOptions(_ *http.Client, req *http.Request, pairs engine.Term, env *engine.Env) error {
 	iter := engine.ListIterator{List: pairs, Env: env}
 	for iter.Next() {
 		elem := iter.Current()
 		switch e := env.Resolve(elem).(type) {
 		case engine.Variable:
-			return nil, engine.ErrInstantiation
+			return engine.ErrInstantiation
 		case *engine.Compound:
 			if e.Functor != "-" || len(e.Args) != 2 {
 				break
@@ -154,49 +138,31 @@ func termHeader(pairs engine.Term, env *engine.Env) (http.Header, error) {
 
 			k, ok := env.Resolve(e.Args[0]).(engine.Atom)
 			if !ok {
-				break
+				return engine.TypeErrorAtom(e.Args[0])
 			}
 
 			var vs []string
 			iter := engine.ListIterator{List: e.Args[1], Env: env}
 			for iter.Next() {
-				v, ok := env.Resolve(elem).(engine.Atom)
-				if !ok {
-					return nil, engine.TypeErrorAtom(elem)
+				switch v := env.Resolve(iter.Current()).(type) {
+				case engine.Variable:
+					return engine.ErrInstantiation
+				case engine.Atom:
+					vs = append(vs, string(v))
+				default:
+					return engine.TypeErrorAtom(v)
 				}
-				vs = append(vs, string(v))
 			}
 			if err := iter.Err(); err != nil {
-				return nil, err
+				return err
 			}
-			ret[string(k)] = vs
-		default:
-			break
+			req.Header[string(k)] = vs
 		}
-		return nil, engine.DomainError("header", elem)
 	}
 	if err := iter.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	return ret, nil
-}
-
-func headerTerm(h http.Header) engine.Term {
-	pairs := make([]engine.Term, 0, len(h))
-	for k, vs := range h {
-		vals := make([]engine.Term, len(vs))
-		for i, v := range vs {
-			vals[i] = engine.Atom(v)
-		}
-		pairs = append(pairs, &engine.Compound{
-			Functor: "-",
-			Args: []engine.Term{
-				engine.Atom(k),
-				engine.List(vals...),
-			},
-		})
-	}
-	return engine.List(pairs...)
+	return nil
 }
 
 var logLevels = map[engine.Atom]func(*zerolog.Logger) *zerolog.Event{
@@ -208,7 +174,7 @@ var logLevels = map[engine.Atom]func(*zerolog.Logger) *zerolog.Event{
 
 func Log(level, msg, pairs engine.Term, k func(*engine.Env) *engine.Promise, env *engine.Env) *engine.Promise {
 	return engine.Delay(func(ctx context.Context) *engine.Promise {
-		log, ok := ctx.Value(logKey).(*zerolog.Logger)
+		log, ok := ctx.Value(LogKey).(*zerolog.Logger)
 		if !ok {
 			return engine.Bool(false)
 		}
